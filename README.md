@@ -12,10 +12,16 @@ reading stats, but it's also fully compatible with plain KOReader's built-in
 
 ## Usage
 
-Run as root on the Proxmox VE host:
+Run as root on the Proxmox VE host, either downloaded first:
 
 ```sh
 bash crosspoint-sync.sh
+```
+
+or as a one-liner:
+
+```sh
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/Boisti13/pve-crosspoint-sync/master/crosspoint-sync.sh)"
 ```
 
 This auto-picks the next free container ID, creates the LXC, and installs the app.
