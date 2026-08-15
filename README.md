@@ -74,6 +74,10 @@ the same thing without needing to `pct enter`.
 
 ## License
 
-MIT — see [LICENSE](LICENSE). This script is unaffiliated with the
-[crosspoint-sync](https://github.com/crosspoint-reader/crosspoint-sync) or
-[CrossPoint](https://github.com/CrossPointOSS/CrossPoint) projects.
+This installer script is [MIT](LICENSE) licensed, unaffiliated with the
+crosspoint-sync or CrossPoint projects.
+
+It doesn't vendor or redistribute any of their code — at install time it just
+`git clone`s [crosspoint-reader/crosspoint-sync](https://github.com/crosspoint-reader/crosspoint-sync)
+directly from upstream, which is itself [MIT licensed](https://github.com/crosspoint-reader/crosspoint-sync/blob/main/LICENSE).
+Same license, no conflict, no code copied here.
