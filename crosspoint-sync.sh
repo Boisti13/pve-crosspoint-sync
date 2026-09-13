@@ -134,18 +134,23 @@ fi
 
 mkdir -p "$APP_DIR" "$DATA_DIR"
 
+# The checkout ends up owned by the service user, while this installer runs as
+# root, so plain git refuses it as "dubious ownership" from the second run on.
+# Scope the exemption to this one path instead of touching global git config.
+GIT=(git -c "safe.directory=$APP_DIR")
+
 NEED_BUILD=0
 if [ -d "$APP_DIR/.git" ]; then
   echo "==> Fetching latest crosspoint-sync ($REPO_BRANCH)"
-  git -C "$APP_DIR" fetch --quiet origin "$REPO_BRANCH"
-  BEFORE="$(git -C "$APP_DIR" rev-parse HEAD)"
-  git -C "$APP_DIR" reset --quiet --hard "origin/$REPO_BRANCH"
-  AFTER="$(git -C "$APP_DIR" rev-parse HEAD)"
+  "${GIT[@]}" -C "$APP_DIR" fetch --quiet origin "$REPO_BRANCH"
+  BEFORE="$("${GIT[@]}" -C "$APP_DIR" rev-parse HEAD)"
+  "${GIT[@]}" -C "$APP_DIR" reset --quiet --hard "origin/$REPO_BRANCH"
+  AFTER="$("${GIT[@]}" -C "$APP_DIR" rev-parse HEAD)"
   [ "$BEFORE" != "$AFTER" ] && NEED_BUILD=1
 else
   echo "==> Cloning crosspoint-sync"
   rm -rf "${APP_DIR:?}"/*
-  git clone --quiet --branch "$REPO_BRANCH" "$REPO_URL" "$APP_DIR"
+  "${GIT[@]}" clone --quiet --branch "$REPO_BRANCH" "$REPO_URL" "$APP_DIR"
   NEED_BUILD=1
 fi
 [ -d "$APP_DIR/dist" ] || NEED_BUILD=1
