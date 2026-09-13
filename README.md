@@ -47,6 +47,7 @@ CTID=115 MEMORY_MB=768 REGISTRATION_DISABLED=true bash crosspoint-sync.sh
 | `REGISTRATION_DISABLED` | `false` | Set `true` to lock out new account registration |
 | `NODE_MAJOR` | `24` | Node.js major version (via NodeSource) |
 | `REPO_URL` / `REPO_BRANCH` | upstream `main` | Override to pin a fork or branch |
+| `INSTALLER_URL` | this repo, `master` | Where `update` re-fetches the installer from each run |
 
 ## What it sets up
 
@@ -59,16 +60,30 @@ CTID=115 MEMORY_MB=768 REGISTRATION_DISABLED=true bash crosspoint-sync.sh
 
 ## Updating
 
-The installer copies itself to `/usr/bin/update` inside the container on first run, so
-after that you don't need this script again:
+The installer drops an `update` command in the container on first run, so after that
+you don't need this script again:
 
 ```sh
 pct enter <ctid>
 update
 ```
 
-`update` pulls the latest crosspoint-sync code, rebuilds only if something changed,
-runs `apt upgrade`, and restarts the service. It's idempotent and safe to run anytime.
+`update` does three things: `apt upgrade` for the whole container, pull the latest
+crosspoint-sync from upstream (rebuilding only if the commit actually changed), and
+restart the service. It's idempotent and safe to run anytime.
+
+### It updates itself, too
+
+`update` is a small bootstrap, not a frozen copy of this script. On each run it
+re-downloads the installer from `INSTALLER_URL`, checks the download is non-empty and
+parses as valid bash, caches it at `/opt/crosspoint-sync/installer.sh`, then runs it.
+
+That means fixes to `update` and `info` themselves reach existing containers. Without
+this, a container installed in January would keep running January's `update` forever.
+
+If the download fails or comes back corrupt, it falls back to the cached copy and says
+so, so a broken network or a bad commit upstream can't leave you with no working
+updater. Set `INSTALLER_URL` to point at your own fork.
 
 ## Connection details
 

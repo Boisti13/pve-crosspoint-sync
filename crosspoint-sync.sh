@@ -45,6 +45,11 @@ NODE_MAJOR="${NODE_MAJOR:-24}"
 REPO_URL="${REPO_URL:-https://github.com/crosspoint-reader/crosspoint-sync.git}"
 REPO_BRANCH="${REPO_BRANCH:-main}"
 
+# Where the container re-fetches THIS script from on every `update` run, so the
+# in-container `update` and `info` commands stay current instead of being frozen
+# at whatever shipped on the day of first install.
+INSTALLER_URL="${INSTALLER_URL:-https://raw.githubusercontent.com/Boisti13/pve-crosspoint-sync/master/crosspoint-sync.sh}"
+
 # ---------------------------------------------------------------------------
 # UI helpers
 # ---------------------------------------------------------------------------
@@ -60,74 +65,8 @@ msg_error() { printf "%b[ERR ]%b %s\n"  "$C_ERR"  "$C_RESET" "$1" >&2; }
 trap 'msg_error "Failed at line $LINENO. Aborting."' ERR
 
 # ---------------------------------------------------------------------------
-# Sanity checks
-# ---------------------------------------------------------------------------
-if ! command -v pveversion >/dev/null 2>&1; then
-  msg_error "This doesn't look like a Proxmox VE host (pveversion not found)."
-  exit 1
-fi
-if [ "$(id -u)" -ne 0 ]; then
-  msg_error "Run this as root on the Proxmox VE host."
-  exit 1
-fi
-
-if [ -z "$CTID" ]; then
-  CTID="$(pvesh get /cluster/nextid)"
-  msg_info "No CTID given, using next free ID: $CTID"
-fi
-
-# ---------------------------------------------------------------------------
-# Create the container (skipped if CTID already exists)
-# ---------------------------------------------------------------------------
-if pct status "$CTID" >/dev/null 2>&1; then
-  msg_warn "Container $CTID already exists — skipping creation, will (re)run the installer."
-else
-  msg_info "Looking for a Debian 12 template..."
-  TEMPLATE="$(pveam available --section system 2>/dev/null | awk '/debian-12-standard/{print $2}' | sort -V | tail -1)"
-  if [ -z "$TEMPLATE" ]; then
-    msg_error "Could not find a debian-12-standard template in 'pveam available'."
-    exit 1
-  fi
-  if ! pveam list "$TEMPLATE_STORAGE" 2>/dev/null | grep -q "$TEMPLATE"; then
-    msg_info "Downloading template $TEMPLATE to storage '$TEMPLATE_STORAGE'..."
-    pveam update >/dev/null
-    pveam download "$TEMPLATE_STORAGE" "$TEMPLATE"
-  fi
-
-  msg_info "Creating CT $CTID ($CT_HOSTNAME) — ${CORES}c/${MEMORY_MB}MB/${DISK_GB}GB on $ROOTFS_STORAGE"
-  pct create "$CTID" "${TEMPLATE_STORAGE}:vztmpl/${TEMPLATE}" \
-    --hostname "$CT_HOSTNAME" \
-    --unprivileged "$UNPRIVILEGED" \
-    --cores "$CORES" \
-    --memory "$MEMORY_MB" \
-    --swap "$SWAP_MB" \
-    --rootfs "${ROOTFS_STORAGE}:${DISK_GB}" \
-    --net0 "name=eth0,bridge=${BRIDGE},ip=${IP_CONFIG},type=veth" \
-    --ostype debian \
-    --onboot "$ONBOOT"
-
-  msg_info "Starting CT $CTID..."
-  pct start "$CTID"
-
-  msg_info "Waiting for network..."
-  for _ in $(seq 1 30); do
-    if pct exec "$CTID" -- sh -c "ip -4 addr show eth0 2>/dev/null | grep -q 'inet '"; then
-      break
-    fi
-    sleep 1
-  done
-fi
-
-if [ "$(pct status "$CTID" | awk '{print $2}')" != "running" ]; then
-  msg_info "CT $CTID is not running, starting it..."
-  pct start "$CTID"
-  sleep 3
-fi
-
-# ---------------------------------------------------------------------------
-# Push the (idempotent) installer and run it inside the container.
-# The installer copies itself to /usr/bin/update, so it also serves as the
-# update mechanism from here on — no need to come back to this host script.
+# The installer that runs INSIDE the container. Defined up here so this script
+# can also execute it directly in --container-install mode (see below).
 # ---------------------------------------------------------------------------
 INNER="$(mktemp)"
 trap 'rm -f "$INNER"' EXIT
@@ -150,6 +89,8 @@ REPO_BRANCH="${REPO_BRANCH:-main}"
 NODE_MAJOR="${NODE_MAJOR:-24}"
 INIT_PORT="${APP_PORT:-8080}"
 INIT_REGISTRATION_DISABLED="${REGISTRATION_DISABLED:-false}"
+INSTALLER_URL="${INSTALLER_URL:-https://raw.githubusercontent.com/Boisti13/pve-crosspoint-sync/master/crosspoint-sync.sh}"
+CACHE_INSTALLER=/opt/crosspoint-sync/installer.sh
 
 echo "==> apt-get update && upgrade"
 apt-get update -qq
@@ -256,11 +197,43 @@ if [ "$NEED_BUILD" = "1" ] || ! systemctl is-active --quiet "$SERVICE_NAME"; the
   systemctl restart "$SERVICE_NAME"
 fi
 
-# Install/refresh the update command (this script IS the update script).
-if [ "$(readlink -f "$0")" != "/usr/bin/update" ]; then
-  cp -f "$0" /usr/bin/update
-  chmod +x /usr/bin/update
+# Seed/refresh the cached installer. SELF_INSTALLER is set by the host script;
+# when `update` runs it instead, the bootstrap below has already refreshed the
+# cache, so there is nothing to copy.
+mkdir -p "$(dirname "$CACHE_INSTALLER")"
+if [ -n "${SELF_INSTALLER:-}" ] && [ -r "${SELF_INSTALLER:-}" ]; then
+  install -m 755 "$SELF_INSTALLER" "$CACHE_INSTALLER"
 fi
+
+# Install/refresh `update` as a self-updating bootstrap. It re-downloads the
+# installer on every run, so `update` and `info` are never frozen at whatever
+# shipped on install day. Falls back to the cached copy when offline, and
+# refuses to run a download that is empty or not valid bash.
+cat > /usr/bin/update <<UPDATE_EOF
+#!/usr/bin/env bash
+# crosspoint-sync updater. Re-downloads the installer, then runs it.
+set -Eeuo pipefail
+INSTALLER_URL="\${INSTALLER_URL:-${INSTALLER_URL}}"
+CACHE="${CACHE_INSTALLER}"
+TMP="\$(mktemp)"
+trap 'rm -f "\$TMP"' EXIT
+
+if curl -fsSL --max-time 30 "\$INSTALLER_URL" -o "\$TMP" \
+   && [ -s "\$TMP" ] && bash -n "\$TMP" 2>/dev/null; then
+  install -m 755 "\$TMP" "\$CACHE"
+  echo "==> Installer refreshed from \$INSTALLER_URL"
+else
+  echo "!! Could not fetch a usable installer from \$INSTALLER_URL"
+  if [ ! -x "\$CACHE" ]; then
+    echo "!! No cached installer at \$CACHE either — aborting." >&2
+    exit 1
+  fi
+  echo "==> Falling back to the cached installer at \$CACHE"
+fi
+
+exec bash "\$CACHE" --container-install
+UPDATE_EOF
+chmod +x /usr/bin/update
 
 # Install/refresh the info command (prints connection details on demand).
 # Named crosspoint-info so it can never clobber texinfo's /usr/bin/info;
@@ -335,9 +308,105 @@ echo "==> To update later: pct enter <ctid>, then run: update"
 echo "==> To see connection details later: run: info"
 INNER_EOF
 
+# ---------------------------------------------------------------------------
+# In-container mode. /usr/bin/update re-runs this same script with
+# --container-install after re-downloading it, so the container picks up the
+# newest installer, `update` bootstrap and `info` command every time.
+# ---------------------------------------------------------------------------
+if [ "${1:-}" = "--container-install" ]; then
+  chmod +x "$INNER"
+  bash "$INNER"
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Sanity checks
+# ---------------------------------------------------------------------------
+if ! command -v pveversion >/dev/null 2>&1; then
+  msg_error "This doesn't look like a Proxmox VE host (pveversion not found)."
+  exit 1
+fi
+if [ "$(id -u)" -ne 0 ]; then
+  msg_error "Run this as root on the Proxmox VE host."
+  exit 1
+fi
+
+if [ -z "$CTID" ]; then
+  CTID="$(pvesh get /cluster/nextid)"
+  msg_info "No CTID given, using next free ID: $CTID"
+fi
+
+# ---------------------------------------------------------------------------
+# Create the container (skipped if CTID already exists)
+# ---------------------------------------------------------------------------
+if pct status "$CTID" >/dev/null 2>&1; then
+  msg_warn "Container $CTID already exists — skipping creation, will (re)run the installer."
+else
+  msg_info "Looking for a Debian 12 template..."
+  TEMPLATE="$(pveam available --section system 2>/dev/null | awk '/debian-12-standard/{print $2}' | sort -V | tail -1)"
+  if [ -z "$TEMPLATE" ]; then
+    msg_error "Could not find a debian-12-standard template in 'pveam available'."
+    exit 1
+  fi
+  if ! pveam list "$TEMPLATE_STORAGE" 2>/dev/null | grep -q "$TEMPLATE"; then
+    msg_info "Downloading template $TEMPLATE to storage '$TEMPLATE_STORAGE'..."
+    pveam update >/dev/null
+    pveam download "$TEMPLATE_STORAGE" "$TEMPLATE"
+  fi
+
+  msg_info "Creating CT $CTID ($CT_HOSTNAME) — ${CORES}c/${MEMORY_MB}MB/${DISK_GB}GB on $ROOTFS_STORAGE"
+  pct create "$CTID" "${TEMPLATE_STORAGE}:vztmpl/${TEMPLATE}" \
+    --hostname "$CT_HOSTNAME" \
+    --unprivileged "$UNPRIVILEGED" \
+    --cores "$CORES" \
+    --memory "$MEMORY_MB" \
+    --swap "$SWAP_MB" \
+    --rootfs "${ROOTFS_STORAGE}:${DISK_GB}" \
+    --net0 "name=eth0,bridge=${BRIDGE},ip=${IP_CONFIG},type=veth" \
+    --ostype debian \
+    --onboot "$ONBOOT"
+
+  msg_info "Starting CT $CTID..."
+  pct start "$CTID"
+
+  msg_info "Waiting for network..."
+  for _ in $(seq 1 30); do
+    if pct exec "$CTID" -- sh -c "ip -4 addr show eth0 2>/dev/null | grep -q 'inet '"; then
+      break
+    fi
+    sleep 1
+  done
+fi
+
+if [ "$(pct status "$CTID" | awk '{print $2}')" != "running" ]; then
+  msg_info "CT $CTID is not running, starting it..."
+  pct start "$CTID"
+  sleep 3
+fi
+
+# ---------------------------------------------------------------------------
+# Push the (idempotent) installer and run it inside the container.
+# The installer copies itself to /usr/bin/update, so it also serves as the
+# update mechanism from here on — no need to come back to this host script.
+# ---------------------------------------------------------------------------
+
+# Resolve a readable copy of THIS script to seed the container's installer
+# cache, so `update` has a known-good fallback even with no network. Run via
+# the curl one-liner there is no file on disk, so re-fetch it first.
+SELF_SRC="$(readlink -f "${BASH_SOURCE[0]:-$0}" 2>/dev/null || true)"
+if [ -z "$SELF_SRC" ] || [ ! -r "$SELF_SRC" ]; then
+  msg_info "Running from a pipe - fetching a copy of the installer to cache in the CT..."
+  SELF_SRC="$(mktemp)"
+  if ! curl -fsSL --max-time 30 "$INSTALLER_URL" -o "$SELF_SRC" || [ ! -s "$SELF_SRC" ]; then
+    msg_error "Could not download the installer from $INSTALLER_URL to cache in the container."
+    exit 1
+  fi
+fi
+
 msg_info "Pushing installer into CT $CTID..."
 pct push "$CTID" "$INNER" /root/crosspoint-sync-install.sh
 pct exec "$CTID" -- chmod +x /root/crosspoint-sync-install.sh
+pct push "$CTID" "$SELF_SRC" /root/crosspoint-sync-installer-full.sh
 
 msg_info "Running installer inside CT $CTID (this builds Node from source deps, can take a couple minutes)..."
 pct exec "$CTID" -- env \
@@ -346,6 +415,8 @@ pct exec "$CTID" -- env \
   NODE_MAJOR="$NODE_MAJOR" \
   REPO_URL="$REPO_URL" \
   REPO_BRANCH="$REPO_BRANCH" \
+  INSTALLER_URL="$INSTALLER_URL" \
+  SELF_INSTALLER=/root/crosspoint-sync-installer-full.sh \
   /root/crosspoint-sync-install.sh
 
 CT_IP="$(pct exec "$CTID" -- hostname -I | awk '{print $1}')"
@@ -387,6 +458,10 @@ also runs apt upgrade):
 
   pct enter $CTID
   update
+
+`update` re-downloads this installer on every run, so the `update` and `info`
+commands themselves stay current instead of being frozen at install day.
+Point it elsewhere with INSTALLER_URL if you fork this.
 
 To print the sync URL and service status at any time:
 
