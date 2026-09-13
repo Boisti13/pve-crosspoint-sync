@@ -70,6 +70,37 @@ update
 `update` pulls the latest crosspoint-sync code, rebuilds only if something changed,
 runs `apt upgrade`, and restarts the service. It's idempotent and safe to run anytime.
 
+## Connection details
+
+The installer also drops an `info` command in the container, so you never have to dig
+for the sync URL again:
+
+```sh
+pct enter <ctid>
+info
+```
+
+```
+  crosspoint-sync
+
+  Sync URL       http://192.168.178.195:8080
+  Service        active (running)
+  Healthcheck    ok
+  Registration   enabled
+  Database       /opt/crosspoint-sync/data/crosspoint.db
+  Config         /opt/crosspoint-sync/crosspoint-sync.env
+
+  Enter this URL on your device: http://192.168.178.195:8080
+```
+
+It reads the live config and service state each time, so it stays correct after you
+edit the env file or the container's IP changes. The real command is
+`crosspoint-info`; `info` is a convenience symlink, created only if nothing else
+already owns that name.
+
+Note that crosspoint-sync is a progress sync server only. It serves no OPDS catalog,
+so there is no catalog address to print here.
+
 Re-running `crosspoint-sync.sh` with `CTID=<existing-id>` from the Proxmox host does
 the same thing without needing to `pct enter`.
 

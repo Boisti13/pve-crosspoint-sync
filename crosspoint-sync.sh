@@ -262,6 +262,62 @@ if [ "$(readlink -f "$0")" != "/usr/bin/update" ]; then
   chmod +x /usr/bin/update
 fi
 
+# Install/refresh the info command (prints connection details on demand).
+# Named crosspoint-info so it can never clobber texinfo's /usr/bin/info;
+# a short `info` alias is linked only when that path is genuinely free.
+cat > /usr/bin/crosspoint-info <<'INFO_EOF'
+#!/usr/bin/env bash
+# crosspoint-sync connection info. Reinstalled on every `update` run.
+set -Eeuo pipefail
+
+ENV_FILE=/opt/crosspoint-sync/crosspoint-sync.env
+SERVICE_NAME=crosspoint-sync
+
+if [ ! -r "$ENV_FILE" ]; then
+  echo "!! Cannot read $ENV_FILE (run as root)" >&2
+  exit 1
+fi
+set -a; . "$ENV_FILE"; set +a
+
+PORT="${PORT:-8080}"
+IP_ADDR="$(hostname -I | awk '{print $1}')"
+URL="http://${IP_ADDR}:${PORT}"
+
+if systemctl is-active --quiet "$SERVICE_NAME"; then
+  STATUS="active (running)"
+else
+  STATUS="INACTIVE - journalctl -u ${SERVICE_NAME} -n 50 --no-pager"
+fi
+
+if curl -fsS "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1; then
+  HEALTH="ok"
+else
+  HEALTH="FAILED"
+fi
+
+if [ "${REGISTRATION_DISABLED:-false}" = "true" ]; then
+  REG="disabled"
+else
+  REG="enabled"
+fi
+
+printf '\n  crosspoint-sync\n\n'
+printf '  Sync URL       %s\n' "$URL"
+printf '  Service        %s\n' "$STATUS"
+printf '  Healthcheck    %s\n' "$HEALTH"
+printf '  Registration   %s\n' "$REG"
+printf '  Database       %s\n' "${DATABASE_PATH:-unknown}"
+printf '  Config         %s\n' "$ENV_FILE"
+printf '\n  Enter this URL on your device: %s\n' "$URL"
+printf '    CrossPoint/CrossInk   Settings > KOReader Sync > Sync Server URL\n'
+printf '    Plain KOReader        Tools > Progress sync > Custom sync server\n\n'
+INFO_EOF
+chmod +x /usr/bin/crosspoint-info
+
+if [ ! -e /usr/bin/info ] || [ -L /usr/bin/info ]; then
+  ln -sfn /usr/bin/crosspoint-info /usr/bin/info
+fi
+
 # Read back actual current config for an accurate summary (may have been
 # hand-edited by the user since first install).
 set -a; source "$ENV_FILE"; set +a
@@ -276,6 +332,7 @@ fi
 echo "==> Registration disabled: ${REGISTRATION_DISABLED}"
 echo "==> Data: ${DATABASE_PATH}"
 echo "==> To update later: pct enter <ctid>, then run: update"
+echo "==> To see connection details later: run: info"
 INNER_EOF
 
 msg_info "Pushing installer into CT $CTID..."
@@ -330,4 +387,9 @@ also runs apt upgrade):
 
   pct enter $CTID
   update
+
+To print the sync URL and service status at any time:
+
+  pct enter $CTID
+  info
 HOWTO
