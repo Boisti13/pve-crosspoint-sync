@@ -483,9 +483,9 @@ also runs apt upgrade):
   pct enter $CTID
   update
 
-`update` re-downloads this installer on every run, so the `update` and `info`
-commands themselves stay current instead of being frozen at install day.
-Point it elsewhere with INSTALLER_URL if you fork this.
+The update command re-downloads this installer on every run, so update and
+info themselves stay current instead of being frozen at install day. Point
+it somewhere else with INSTALLER_URL if you fork this.
 
 To print the sync URL and service status at any time:
 
