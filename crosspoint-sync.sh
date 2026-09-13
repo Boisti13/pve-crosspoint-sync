@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
 #
-# Proxmox VE helper script — crosspoint-sync
-# https://github.com/crosspoint-reader/crosspoint-sync
+# Proxmox VE helper script - crosspoint-sync
+#
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Bastian Kolb
+#
+# Installer:  https://github.com/Boisti13/pve-crosspoint-sync
+# Upstream:   https://github.com/crosspoint-reader/crosspoint-sync (MIT)
+#
+# This installer is MIT licensed and vendors no upstream code. At install time
+# it git-clones crosspoint-sync directly from upstream, which is MIT licensed
+# too, so there is no license conflict and nothing is redistributed here.
 #
 # Creates a Debian 12 LXC and installs crosspoint-sync BAREMETAL inside it
 # (Node.js + systemd, no Docker). KOSync-compatible reading-progress sync
