@@ -36,7 +36,7 @@ CTID=115 MEMORY_MB=768 REGISTRATION_DISABLED=true bash crosspoint-sync.sh
 | `CTID` | next free ID | Set to an existing container's ID to (re)run the installer against it instead of creating a new one |
 | `CT_HOSTNAME` | `crosspoint-sync` | |
 | `DISK_GB` | `4` | |
-| `MEMORY_MB` | `1024` | |
+| `MEMORY_MB` | `512` | Enough for the `tsc` build and ~75MB runtime; raise only for heavy use |
 | `SWAP_MB` | `512` | |
 | `CORES` | `1` | |
 | `BRIDGE` | `vmbr0` | |

@@ -29,7 +29,7 @@ set -Eeuo pipefail
 CTID="${CTID:-}"
 CT_HOSTNAME="${CT_HOSTNAME:-crosspoint-sync}"
 DISK_GB="${DISK_GB:-4}"
-MEMORY_MB="${MEMORY_MB:-1024}"
+MEMORY_MB="${MEMORY_MB:-512}"
 SWAP_MB="${SWAP_MB:-512}"
 CORES="${CORES:-1}"
 BRIDGE="${BRIDGE:-vmbr0}"
