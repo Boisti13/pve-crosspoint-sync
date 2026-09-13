@@ -172,9 +172,12 @@ EOF
   chmod 600 "$ENV_FILE"
 fi
 
-if [ ! -f "/etc/systemd/system/${SERVICE_NAME}.service" ]; then
-  echo "==> Installing systemd unit"
-  cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<EOF
+# Render the unit every run and install it only when it actually differs, so
+# changes to the unit (paths, hardening, user) reach existing containers too.
+# The old "write it only if absent" guard meant a container kept whatever unit
+# it was born with, forever.
+NEW_UNIT="$(mktemp)"
+cat > "$NEW_UNIT" <<EOF
 [Unit]
 Description=crosspoint-sync (KOSync-compatible sync server)
 After=network-online.target
@@ -197,11 +200,18 @@ ReadWritePaths=${DATA_DIR}
 [Install]
 WantedBy=multi-user.target
 EOF
-  systemctl daemon-reload
-  systemctl enable --quiet "$SERVICE_NAME"
-fi
 
-if [ "$NEED_BUILD" = "1" ] || ! systemctl is-active --quiet "$SERVICE_NAME"; then
+NEED_RESTART=0
+if ! cmp -s "$NEW_UNIT" "/etc/systemd/system/${SERVICE_NAME}.service"; then
+  echo "==> Installing/updating systemd unit"
+  install -m 644 "$NEW_UNIT" "/etc/systemd/system/${SERVICE_NAME}.service"
+  systemctl daemon-reload
+  NEED_RESTART=1
+fi
+rm -f "$NEW_UNIT"
+systemctl enable --quiet "$SERVICE_NAME"
+
+if [ "$NEED_BUILD" = "1" ] || [ "${NEED_RESTART:-0}" = "1" ] || ! systemctl is-active --quiet "$SERVICE_NAME"; then
   echo "==> (Re)starting $SERVICE_NAME"
   systemctl restart "$SERVICE_NAME"
 fi
